@@ -1,10 +1,15 @@
-use std::net::{IpAddr, Ipv4Addr};
+use std::{
+    io,
+    net::{IpAddr, Ipv4Addr},
+};
 
 use gotatun::{
     packet::{Ip, Packet, PacketBufPool},
     tun::{IpRecv, IpSend, MtuWatcher},
+    tun::tun_async_device::TunDevice as GotaTunDevice,
 };
 use ipnetwork::IpNetwork;
+use tokio::sync::mpsc;
 
 use crate::config::Config;
 
@@ -96,7 +101,7 @@ impl<T: IpRecv + Clone> IpRecv for SnatTunDevice<T> {
 }
 
 /// Outbound path (tun → WireGuard peer): rewrite src to the extra peer address.
-fn snat_outbound(packet: Packet<Ip>, config: &SnatConfig) -> Packet<Ip> {
+pub(super) fn snat_outbound(packet: Packet<Ip>, config: &SnatConfig) -> Packet<Ip> {
     let Some((extra_addr, _)) = config.active_addrs() else {
         return packet;
     };
@@ -122,7 +127,7 @@ fn snat_outbound(packet: Packet<Ip>, config: &SnatConfig) -> Packet<Ip> {
 }
 
 /// Inbound path (WireGuard peer → tun): rewrite dst back to the primary VPN address.
-fn snat_inbound(packet: Packet<Ip>, config: &SnatConfig) -> Packet<Ip> {
+pub(super) fn snat_inbound(packet: Packet<Ip>, config: &SnatConfig) -> Packet<Ip> {
     let Some((extra_addr, primary_addr)) = config.active_addrs() else {
         return packet;
     };
@@ -208,4 +213,100 @@ fn update_addr_in_checksum(old_csum: u16, old_addr: Ipv4Addr, new_addr: Ipv4Addr
 fn fold_add(a: u32, b: u32) -> u32 {
     let s = a + b;
     (s >> 16) + (s & 0xffff)
+}
+
+/// Return `true` if the packet's destination IP is covered by one of `nets`.
+pub(super) fn is_extra_peer_dest(packet: &Packet<Ip>, nets: &[IpNetwork]) -> bool {
+    let Some(dst) = packet.destination() else {
+        return false;
+    };
+    nets.iter().any(|net| net.contains(dst))
+}
+
+/// Number of pending packets buffered for the extra-peer device.
+pub(super) const EXTRA_PEER_CHANNEL_CAPACITY: usize = 128;
+
+// ---------------------------------------------------------------------------
+// Tun adapters used by the separate extra-peer device
+// ---------------------------------------------------------------------------
+
+/// [`IpSend`] for the extra-peer device: applies inbound SNAT and writes to
+/// the real tun fd so the application receives packets at its primary VPN IP.
+pub(super) struct ExtraPeerTunSend {
+    pub inner: GotaTunDevice,
+    pub snat_config: SnatConfig,
+}
+
+impl IpSend for ExtraPeerTunSend {
+    async fn send(&mut self, packet: Packet<Ip>) -> io::Result<()> {
+        let packet = snat_inbound(packet, &self.snat_config);
+        self.inner.send(packet).await
+    }
+}
+
+/// [`IpRecv`] for the extra-peer device: receives raw packets from a channel
+/// (fed by [`FilteredTunRecv`]) and applies outbound SNAT before encryption.
+pub(super) struct ExtraPeerTunRecv {
+    pub rx: mpsc::Receiver<Packet<Ip>>,
+    pub snat_config: SnatConfig,
+    pub mtu: u16,
+}
+
+impl IpRecv for ExtraPeerTunRecv {
+    async fn recv<'a>(
+        &'a mut self,
+        _pool: &mut PacketBufPool,
+    ) -> io::Result<impl Iterator<Item = Packet<Ip>> + Send + 'a> {
+        let packet = self
+            .rx
+            .recv()
+            .await
+            .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "extra-peer channel closed"))?;
+        let packet = snat_outbound(packet, &self.snat_config);
+        Ok(std::iter::once(packet))
+    }
+
+    fn mtu(&self) -> MtuWatcher {
+        MtuWatcher::new(self.mtu)
+    }
+}
+
+/// [`IpRecv`] for the main (Mullvad relay) device when extra peers are present.
+///
+/// Reads packets from the real tun fd and dispatches extra-peer-bound packets
+/// to `extra_tx` so the separate extra-peer device can handle them.  All other
+/// packets are returned to the main device for encryption towards the relay.
+pub(super) struct FilteredTunRecv {
+    pub inner: GotaTunDevice,
+    /// All allowed-IP prefixes that belong to extra peers (IPv4 and IPv6).
+    pub extra_peer_nets: Vec<IpNetwork>,
+    pub extra_tx: mpsc::Sender<Packet<Ip>>,
+}
+
+impl IpRecv for FilteredTunRecv {
+    async fn recv<'a>(
+        &'a mut self,
+        pool: &mut PacketBufPool,
+    ) -> io::Result<impl Iterator<Item = Packet<Ip>> + Send + 'a> {
+        loop {
+            let packets = self.inner.recv(pool).await?;
+            let mut main_packets: Vec<Packet<Ip>> = Vec::new();
+            for packet in packets {
+                if is_extra_peer_dest(&packet, &self.extra_peer_nets) {
+                    // Best-effort: drop the packet if the channel is full.
+                    let _ = self.extra_tx.try_send(packet);
+                } else {
+                    main_packets.push(packet);
+                }
+            }
+            if !main_packets.is_empty() {
+                return Ok(main_packets.into_iter());
+            }
+            // All packets went to extra peers; read again.
+        }
+    }
+
+    fn mtu(&self) -> MtuWatcher {
+        self.inner.mtu()
+    }
 }

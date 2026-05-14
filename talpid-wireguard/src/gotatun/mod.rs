@@ -51,7 +51,10 @@ use conversions::to_gotatun_extra_peer;
 use conversions::to_gotatun_peer;
 use obfuscation::MaybeObfuscatingTransportFactory;
 #[cfg(target_os = "android")]
-use snat::{SnatConfig, SnatTunDevice};
+use snat::{
+    EXTRA_PEER_CHANNEL_CAPACITY, ExtraPeerTunRecv, ExtraPeerTunSend, FilteredTunRecv, SnatConfig,
+    SnatTunDevice,
+};
 
 #[cfg(target_os = "android")]
 type UdpFactory = AndroidUdpSocketFactory;
@@ -65,6 +68,12 @@ type TransportFactory = MaybeObfuscatingTransportFactory<UdpFactory>;
 type SinglehopDevice = Device<(TransportFactory, SnatTunDevice<GotaTunDevice>, SnatTunDevice<GotaTunDevice>)>;
 #[cfg(not(target_os = "android"))]
 type SinglehopDevice = Device<(TransportFactory, GotaTunDevice, GotaTunDevice)>;
+/// Main (Mullvad relay) device used when extra peers require a separate device.
+#[cfg(target_os = "android")]
+type MainDeviceWithFilter = Device<(TransportFactory, GotaTunDevice, FilteredTunRecv)>;
+/// Separate device used exclusively for extra peers, keeping the original private key.
+#[cfg(target_os = "android")]
+type ExtraPeersDevice = Device<(AndroidUdpSocketFactory, ExtraPeerTunSend, ExtraPeerTunRecv)>;
 type ExitDevice = Device<(UdpChannelFactory, GotaTunDevice, GotaTunDevice)>;
 
 #[cfg(not(all(feature = "multihop-pcap", target_os = "linux")))]
@@ -89,6 +98,11 @@ pub struct GotaTun {
     #[cfg(target_os = "android")]
     android_tun: Arc<Tun>,
 
+    /// Original device private key, captured at tunnel creation.  Never replaced
+    /// by PQ ephemeral keys so extra-peer devices can always use it.
+    #[cfg(target_os = "android")]
+    original_private_key: talpid_types::net::wireguard::PrivateKey,
+
     /// Tunnel config
     config: Config,
 
@@ -106,12 +120,17 @@ impl GotaTun {
         let tun_dev = GotaTunDevice::from_tun_device(tun_dev)
             .map_err(|e| TunnelError::RecoverableStartWireguardError(Box::new(e)))?;
 
+        #[cfg(target_os = "android")]
+        let original_private_key = config.tunnel.private_key.clone();
+
         let devices = create_devices(
             &config,
             None,
             tun_dev.clone(),
             #[cfg(target_os = "android")]
             android_tun.clone(),
+            #[cfg(target_os = "android")]
+            &original_private_key,
         )
         .await?;
 
@@ -121,6 +140,8 @@ impl GotaTun {
             tun_dev,
             #[cfg(target_os = "android")]
             android_tun,
+            #[cfg(target_os = "android")]
+            original_private_key,
             devices: Some(devices),
         })
     }
@@ -134,6 +155,15 @@ enum Devices {
     Multihop {
         entry_device: EntryDevice,
         exit_device: ExitDevice,
+    },
+
+    /// Singlehop with extra peers routed through a separate WireGuard device
+    /// that retains the original private key, so PQ key rotation does not
+    /// break extra-peer connections.
+    #[cfg(target_os = "android")]
+    SinglehopWithExtraPeers {
+        main_device: MainDeviceWithFilter,
+        extra_device: ExtraPeersDevice,
     },
 }
 
@@ -149,6 +179,14 @@ impl Devices {
             } => {
                 exit_device.stop().await;
                 entry_device.stop().await;
+            }
+            #[cfg(target_os = "android")]
+            Devices::SinglehopWithExtraPeers {
+                main_device,
+                extra_device,
+            } => {
+                main_device.stop().await;
+                extra_device.stop().await;
             }
         }
     }
@@ -291,9 +329,10 @@ async fn create_devices(
     daita: Option<&DaitaSettings>,
     tun_dev: GotaTunDevice,
     #[cfg(target_os = "android")] android_tun: Arc<Tun>,
+    #[cfg(target_os = "android")] original_private_key: &talpid_types::net::wireguard::PrivateKey,
 ) -> Result<Devices, TunnelError> {
     #[cfg(target_os = "android")]
-    let base_factory = AndroidUdpSocketFactory { tun: android_tun };
+    let base_factory = AndroidUdpSocketFactory { tun: android_tun.clone() };
 
     #[cfg(not(target_os = "android"))]
     let base_factory = UdpSocketFactory;
@@ -359,6 +398,57 @@ async fn create_devices(
         }
     } else {
         // Singlehop setup
+
+        #[cfg(target_os = "android")]
+        if !config.extra_peers.is_empty() {
+            // Extra peers must use the original private key even after PQ key rotation.
+            // Use a separate WireGuard device so the two keys never share an interface.
+            let snat_config = SnatConfig::from_config(config);
+            let extra_peer_nets: Vec<ipnetwork::IpNetwork> = config
+                .extra_peers
+                .iter()
+                .flat_map(|p| p.allowed_ips.iter().cloned())
+                .collect();
+
+            let (extra_tx, extra_rx) =
+                tokio::sync::mpsc::channel(EXTRA_PEER_CHANNEL_CAPACITY);
+
+            let filtered_recv = FilteredTunRecv {
+                inner: tun_dev.clone(),
+                extra_peer_nets,
+                extra_tx,
+            };
+            let main_device = DeviceBuilder::new()
+                .with_udp(factory)
+                .with_ip_pair(tun_dev.clone(), filtered_recv)
+                .build()
+                .await
+                .map_err(TunnelError::GotaTunDevice)?;
+
+            let extra_peer_send = ExtraPeerTunSend {
+                inner: tun_dev,
+                snat_config: snat_config.clone(),
+            };
+            let extra_peer_recv = ExtraPeerTunRecv {
+                rx: extra_rx,
+                snat_config,
+                mtu: config.mtu,
+            };
+            let extra_factory = AndroidUdpSocketFactory { tun: android_tun };
+            let extra_device = DeviceBuilder::new()
+                .with_udp(extra_factory)
+                .with_ip_pair(extra_peer_send, extra_peer_recv)
+                .build()
+                .await
+                .map_err(TunnelError::GotaTunDevice)?;
+
+            let devices = Devices::SinglehopWithExtraPeers {
+                main_device,
+                extra_device,
+            };
+            configure_devices_split(&devices, config, daita, original_private_key).await?;
+            return Ok(devices);
+        }
 
         #[cfg(target_os = "android")]
         let tun_dev = SnatTunDevice::new(tun_dev, SnatConfig::from_config(config));
@@ -462,6 +552,10 @@ async fn configure_devices(
             Devices::Singlehop { device } => {
                 configure_entry_device(device, config, daita).await?;
             }
+            #[cfg(target_os = "android")]
+            Devices::SinglehopWithExtraPeers { .. } => {
+                // Handled separately via configure_devices_split.
+            }
             _ => {
                 return Err(TunnelError::ConfigureGotaTunDevice(
                     ConfigureGotaTunDeviceError::ExpectedSinglehopDevice,
@@ -471,6 +565,53 @@ async fn configure_devices(
     }
 
     Ok(())
+}
+
+/// Configure both sub-devices of a [Devices::SinglehopWithExtraPeers].
+///
+/// The main device gets the current (possibly ephemeral) private key.
+/// The extra-peer device always uses the original device key so that
+/// extra-peer servers can authenticate us regardless of PQ key rotation.
+#[cfg(target_os = "android")]
+async fn configure_devices_split(
+    devices: &Devices,
+    config: &Config,
+    daita: Option<&DaitaSettings>,
+    original_private_key: &talpid_types::net::wireguard::PrivateKey,
+) -> Result<(), TunnelError> {
+    let Devices::SinglehopWithExtraPeers {
+        main_device,
+        extra_device,
+    } = devices
+    else {
+        return Err(TunnelError::ConfigureGotaTunDevice(
+            ConfigureGotaTunDeviceError::ExpectedSinglehopDevice,
+        ));
+    };
+    configure_entry_device(main_device, config, daita).await?;
+    configure_extra_peers_device(extra_device, original_private_key).await
+}
+
+/// Set the private key on the extra-peer device and clear any stale peers.
+/// The actual peers are added later via [GotaTun::add_or_update_extra_peer].
+#[cfg(target_os = "android")]
+async fn configure_extra_peers_device(
+    device: &ExtraPeersDevice,
+    original_private_key: &talpid_types::net::wireguard::PrivateKey,
+) -> Result<(), TunnelError> {
+    let private_key = StaticSecret::from(original_private_key.to_bytes());
+    device
+        .write(async |device| {
+            device.clear_peers();
+            device.set_private_key(private_key).await;
+            Ok(())
+        })
+        .await
+        .flatten()
+        .map_err(|err| {
+            log::error!("Failed to configure extra-peer gotatun device: {err:#}");
+            TunnelError::SetConfigError
+        })
 }
 
 #[async_trait::async_trait]
@@ -515,6 +656,15 @@ impl Tunnel for GotaTun {
                 stats.extend(get_stats(exit_device).await);
                 stats
             }
+            #[cfg(target_os = "android")]
+            Some(Devices::SinglehopWithExtraPeers {
+                main_device,
+                extra_device,
+            }) => {
+                let mut stats = get_stats(main_device).await;
+                stats.extend(get_stats(extra_device).await);
+                stats
+            }
             None if cfg!(debug_assertions) => unreachable!("device must be Some"),
             None => StatsMap::default(),
         };
@@ -549,6 +699,9 @@ impl Tunnel for GotaTun {
 
         match self.devices.as_ref() {
             Some(Devices::Singlehop { device }) => add_or_update_peer(device, peer, endpoint).await,
+            Some(Devices::SinglehopWithExtraPeers { extra_device, .. }) => {
+                add_or_update_peer(extra_device, peer, endpoint).await
+            }
             Some(Devices::Multihop { .. }) => {
                 log::warn!("Extra WireGuard peers are unsupported with multihop");
                 Ok(false)
@@ -594,6 +747,8 @@ impl Tunnel for GotaTun {
                             self.tun_dev.clone(),
                             #[cfg(target_os = "android")]
                             self.android_tun.clone(),
+                            #[cfg(target_os = "android")]
+                            &self.original_private_key,
                         )
                         .await?,
                     )
