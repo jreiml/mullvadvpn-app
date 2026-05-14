@@ -65,6 +65,7 @@ import net.mullvad.mullvadvpn.feature.splittunneling.impl.applist.ApplicationsPr
 import net.mullvad.mullvadvpn.feature.splittunneling.impl.applist.SplitTunnelingUseCase
 import net.mullvad.mullvadvpn.feature.splittunneling.impl.search.SearchSplitTunnelingViewModel
 import net.mullvad.mullvadvpn.feature.vpnsettings.impl.VpnSettingsViewModel
+import net.mullvad.mullvadvpn.feature.vpnsettings.impl.extrapeers.ExtraPeersViewModel
 import net.mullvad.mullvadvpn.feature.vpnsettings.impl.mtu.MtuDialogViewModel
 import net.mullvad.mullvadvpn.lib.common.constant.BillingTypes
 import net.mullvad.mullvadvpn.lib.model.PackageName
@@ -327,7 +328,8 @@ val uiModule = module {
     viewModel { SettingsViewModel(get(), get(), get(), get(), IS_PLAY_BUILD) }
     viewModel { SplashViewModel(get(), get(), get(), get()) }
     viewModel { VoucherDialogViewModel(get(), get()) }
-    viewModel { params -> VpnSettingsViewModel(navArgs = params.get(), get(), get(), get(), get()) }
+    viewModel { params -> VpnSettingsViewModel(navArgs = params.get(), get(), get(), get(), get(), get()) }
+    viewModel { ExtraPeersViewModel(get(), androidContext()) }
     viewModel { params -> AntiCensorshipSettingsViewModel(isModal = params.get(), get()) }
     viewModel { WelcomeViewModel(get(), get(), get(), get(), isPlayBuild = IS_PLAY_BUILD) }
     viewModel {

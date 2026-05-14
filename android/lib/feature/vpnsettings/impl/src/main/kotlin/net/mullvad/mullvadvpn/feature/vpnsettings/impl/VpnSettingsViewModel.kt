@@ -24,6 +24,7 @@ import net.mullvad.mullvadvpn.lib.model.IpVersion
 import net.mullvad.mullvadvpn.lib.model.QuantumResistantState
 import net.mullvad.mullvadvpn.lib.repository.AutoStartAndConnectOnBootRepository
 import net.mullvad.mullvadvpn.lib.repository.SettingsRepository
+import net.mullvad.mullvadvpn.lib.repository.UserPreferencesRepository
 import net.mullvad.mullvadvpn.lib.repository.WireguardConstraintsRepository
 import net.mullvad.mullvadvpn.lib.usecase.SystemVpnSettingsAvailableUseCase
 
@@ -39,6 +40,7 @@ class VpnSettingsViewModel(
     private val systemVpnSettingsUseCase: SystemVpnSettingsAvailableUseCase,
     private val autoStartAndConnectOnBootRepository: AutoStartAndConnectOnBootRepository,
     private val wireguardConstraintsRepository: WireguardConstraintsRepository,
+    private val userPreferencesRepository: UserPreferencesRepository,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
 
@@ -48,7 +50,8 @@ class VpnSettingsViewModel(
         combine(
                 settingsRepository.settingsUpdates.filterNotNull(),
                 autoStartAndConnectOnBootRepository.autoStartAndConnectOnBoot,
-            ) { settings, autoStartAndConnectOnBoot ->
+                userPreferencesRepository.extraPeersEnabled(),
+            ) { settings, autoStartAndConnectOnBoot, extraPeersEnabled ->
                 VpnSettingsUiState.from(
                         mtu = settings.tunnelOptions.mtu,
                         isLocalNetworkSharingEnabled = settings.allowLan,
@@ -59,6 +62,7 @@ class VpnSettingsViewModel(
                         deviceIpVersion = settings.deviceIpVersion(),
                         isIpv6Enabled = settings.tunnelOptions.enableIpv6,
                         isModal = navArgs.isModal,
+                        extraPeersEnabled = extraPeersEnabled,
                     )
                     .toLc<Boolean, VpnSettingsUiState>()
             }

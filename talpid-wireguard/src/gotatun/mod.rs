@@ -43,9 +43,15 @@ use gotatun::tun::{
 
 mod conversions;
 mod obfuscation;
+#[cfg(target_os = "android")]
+mod snat;
 
+#[cfg(target_os = "android")]
+use conversions::to_gotatun_extra_peer;
 use conversions::to_gotatun_peer;
 use obfuscation::MaybeObfuscatingTransportFactory;
+#[cfg(target_os = "android")]
+use snat::{SnatConfig, SnatTunDevice};
 
 #[cfg(target_os = "android")]
 type UdpFactory = AndroidUdpSocketFactory;
@@ -55,6 +61,9 @@ type UdpFactory = UdpSocketFactory;
 
 type TransportFactory = MaybeObfuscatingTransportFactory<UdpFactory>;
 
+#[cfg(target_os = "android")]
+type SinglehopDevice = Device<(TransportFactory, SnatTunDevice<GotaTunDevice>, SnatTunDevice<GotaTunDevice>)>;
+#[cfg(not(target_os = "android"))]
 type SinglehopDevice = Device<(TransportFactory, GotaTunDevice, GotaTunDevice)>;
 type ExitDevice = Device<(UdpChannelFactory, GotaTunDevice, GotaTunDevice)>;
 
@@ -351,6 +360,9 @@ async fn create_devices(
     } else {
         // Singlehop setup
 
+        #[cfg(target_os = "android")]
+        let tun_dev = SnatTunDevice::new(tun_dev, SnatConfig::from_config(config));
+
         let device = DeviceBuilder::new()
             .with_udp(factory)
             .with_ip(tun_dev)
@@ -508,6 +520,42 @@ impl Tunnel for GotaTun {
         };
 
         Ok(stats)
+    }
+
+    #[cfg(target_os = "android")]
+    async fn add_or_update_extra_peer(
+        &self,
+        peer: &talpid_types::net::wireguard::ExtraPeerConfig,
+        endpoint: std::net::SocketAddr,
+    ) -> Result<bool, TunnelError> {
+        async fn add_or_update_peer(
+            device: &Device<impl DeviceTransports>,
+            peer: &talpid_types::net::wireguard::ExtraPeerConfig,
+            endpoint: std::net::SocketAddr,
+        ) -> Result<bool, TunnelError> {
+            let peer = to_gotatun_extra_peer(peer, Some(endpoint));
+            device
+                .write(async |device| {
+                    device.add_or_update_peer(peer).await;
+                    Ok(true)
+                })
+                .await
+                .flatten()
+                .map_err(|err| {
+                    log::error!("Failed to add or update gotatun extra peer: {err:#}");
+                    TunnelError::SetConfigError
+                })
+        }
+
+        match self.devices.as_ref() {
+            Some(Devices::Singlehop { device }) => add_or_update_peer(device, peer, endpoint).await,
+            Some(Devices::Multihop { .. }) => {
+                log::warn!("Extra WireGuard peers are unsupported with multihop");
+                Ok(false)
+            }
+            None if cfg!(debug_assertions) => unreachable!("device must be Some"),
+            None => Ok(false),
+        }
     }
 
     fn set_config<'a>(

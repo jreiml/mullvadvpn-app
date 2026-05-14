@@ -73,4 +73,16 @@ class UserPreferencesRepository(
             prefs.toBuilder().setShowSystemAppsSplitTunneling(show).build()
         }
     }
+
+    fun extraPeersEnabled(): Flow<Boolean> =
+        userPreferencesStore.data.map { it.extraPeersEnabled }
+
+    fun extraPeersConfig(): Flow<String> =
+        userPreferencesStore.data.map { it.extraPeersConfig }
+
+    suspend fun setExtraPeers(enabled: Boolean, config: String) {
+        userPreferencesStore.updateData { prefs ->
+            prefs.toBuilder().setExtraPeersEnabled(enabled).setExtraPeersConfig(config).build()
+        }
+    }
 }

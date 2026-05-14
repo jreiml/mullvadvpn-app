@@ -1,4 +1,6 @@
 use std::net::SocketAddr;
+#[cfg(target_os = "android")]
+use std::path::PathBuf;
 use std::{future::Future, net::IpAddr, pin::Pin, sync::Arc};
 
 use talpid_types::net::wireguard::TunnelParameters;
@@ -41,6 +43,10 @@ struct InnerParametersGenerator {
     relay_settings: RelaySettings,
     tunnel_options: TunnelOptions,
     account_manager: AccountManagerHandle,
+    #[cfg(target_os = "android")]
+    settings_dir: PathBuf,
+    #[cfg(target_os = "android")]
+    allow_lan: bool,
 
     last_generated_relays: Option<LastSelectedRelays>,
 }
@@ -52,12 +58,18 @@ impl ParametersGenerator {
         relay_selector: RelaySelector,
         relay_settings: RelaySettings,
         tunnel_options: TunnelOptions,
+        #[cfg(target_os = "android")] settings_dir: PathBuf,
+        #[cfg(target_os = "android")] allow_lan: bool,
     ) -> Self {
         Self(Arc::new(Mutex::new(InnerParametersGenerator {
             tunnel_options,
             relay_selector,
             relay_settings,
             account_manager,
+            #[cfg(target_os = "android")]
+            settings_dir,
+            #[cfg(target_os = "android")]
+            allow_lan,
             last_generated_relays: None,
         })))
     }
@@ -71,6 +83,10 @@ impl ParametersGenerator {
     pub async fn set_settings(&self, settings: Settings) {
         let mut inner = self.0.lock().await;
         inner.relay_settings = settings.relay_settings.clone();
+        #[cfg(target_os = "android")]
+        {
+            inner.allow_lan = settings.allow_lan;
+        }
         inner.relay_selector.set_config(&settings);
     }
 
@@ -158,10 +174,12 @@ impl InnerParametersGenerator {
             server_override,
         });
 
-        Ok(self.create_wireguard_tunnel_parameters(endpoint, data, obfuscator))
+        Ok(self
+            .create_wireguard_tunnel_parameters(endpoint, data, obfuscator)
+            .await)
     }
 
-    fn create_wireguard_tunnel_parameters(
+    async fn create_wireguard_tunnel_parameters(
         &self,
         endpoint: MullvadEndpoint,
         data: PrivateAccountAndDevice,
@@ -169,9 +187,17 @@ impl InnerParametersGenerator {
     ) -> TunnelParameters {
         let tunnel_ipv4 = data.device.wg_data.addresses.ipv4_address.ip();
         let tunnel_ipv6 = data.device.wg_data.addresses.ipv6_address.ip();
+        #[cfg(target_os = "android")]
+        let extra_peers_config = crate::extra_peers::load(&self.settings_dir, self.allow_lan).await;
         let tunnel = wireguard::TunnelConfig {
             private_key: data.device.wg_data.private_key,
-            addresses: vec![IpAddr::from(tunnel_ipv4), IpAddr::from(tunnel_ipv6)],
+            addresses: {
+                let base = [IpAddr::from(tunnel_ipv4), IpAddr::from(tunnel_ipv6)];
+                #[cfg(target_os = "android")]
+                { base.into_iter().chain(extra_peers_config.addresses).collect() }
+                #[cfg(not(target_os = "android"))]
+                { base.to_vec() }
+            },
         };
 
         wireguard::TunnelParameters {
@@ -179,6 +205,8 @@ impl InnerParametersGenerator {
                 tunnel,
                 peer: endpoint.peer,
                 exit_peer: endpoint.exit_peer,
+                #[cfg(target_os = "android")]
+                extra_peers: extra_peers_config.peers,
                 ipv4_gateway: endpoint.ipv4_gateway,
                 ipv6_gateway: Some(endpoint.ipv6_gateway),
                 #[cfg(target_os = "linux")]

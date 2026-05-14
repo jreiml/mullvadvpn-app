@@ -25,6 +25,7 @@ class VpnSettingsUiStatePreviewParameterProvider :
                     obfuscationMode = ObfuscationMode.Udp2Tcp,
                     deviceIpVersion = Constraint.Any,
                     isModal = false,
+                    extraPeersEnabled = false,
                 )
                 .toLc(),
         )

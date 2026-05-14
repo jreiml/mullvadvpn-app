@@ -47,6 +47,8 @@ pub struct ConnectingState {
     allowed_tunnel_traffic: AllowedTunnelTraffic,
     tunnel_close_event: TunnelCloseEvent,
     tunnel_close_tx: oneshot::Sender<()>,
+    #[cfg(target_os = "android")]
+    extra_peers_refresh_tx: tokio::sync::watch::Sender<u64>,
     retry_attempt: u32,
 }
 
@@ -240,8 +242,12 @@ impl ConnectingState {
 
         let (tunnel_close_tx, tunnel_close_rx) = oneshot::channel();
         let (tunnel_close_event_tx, tunnel_close_event_rx) = oneshot::channel();
+        #[cfg(target_os = "android")]
+        let (extra_peers_refresh_tx, extra_peers_refresh_rx) = tokio::sync::watch::channel(0u64);
 
         let tunnel_parameters = parameters.clone();
+        #[cfg(target_os = "android")]
+        let extra_peers_refresh_tx_for_state = extra_peers_refresh_tx.clone();
 
         tokio::task::spawn_blocking(move || {
             let start = Instant::now();
@@ -257,6 +263,8 @@ impl ConnectingState {
                 tun_provider,
                 retry_attempt,
                 route_manager,
+                #[cfg(target_os = "android")]
+                extra_peers_refresh_rx,
             };
 
             #[cfg(target_os = "windows")]
@@ -321,6 +329,8 @@ impl ConnectingState {
             allowed_tunnel_traffic: INITIAL_ALLOWED_TUNNEL_TRAFFIC,
             tunnel_close_event: tunnel_close_event_rx.fuse(),
             tunnel_close_tx,
+            #[cfg(target_os = "android")]
+            extra_peers_refresh_tx: extra_peers_refresh_tx_for_state,
             retry_attempt,
         }
     }
@@ -602,6 +612,8 @@ impl ConnectingState {
                 self.tunnel_parameters,
                 self.tunnel_close_event,
                 self.tunnel_close_tx,
+                #[cfg(target_os = "android")]
+                self.extra_peers_refresh_tx,
             )),
             Some((TunnelEvent::Down, _)) => {
                 // It is important to reset this before the tunnel device is down,

@@ -24,6 +24,7 @@ data class VpnSettingsUiState(
             deviceIpVersion: Constraint<IpVersion>,
             isIpv6Enabled: Boolean,
             isModal: Boolean,
+            extraPeersEnabled: Boolean,
         ) =
             VpnSettingsUiState(
                 buildList {
@@ -78,6 +79,10 @@ data class VpnSettingsUiState(
 
                     // Server IP override
                     add(VpnSettingItem.ServerIpOverrides)
+                    add(VpnSettingItem.Spacer)
+
+                    // Extra WireGuard peers
+                    add(VpnSettingItem.ExtraPeers(extraPeersEnabled))
                     add(VpnSettingItem.Spacer)
                 },
                 isModal = isModal,

@@ -534,4 +534,10 @@
     <string name="dns_settings_description_first_item">Prevents the device from contacting certain domains or websites known for distributing ads, malware, trackers and more.</string>
     <string name="dns_settings_description_second_item">You can either use our built-in content blockers or use a custom DNS server. This might cause issues on certain websites, services, and apps.</string>
     <string name="dns_settings_description_warning"><b>Attention: DNS settings might not go into effect immediately.</b></string>
+    <string name="extra_wg_peers_title">Extra WireGuard peers</string>
+    <string name="extra_wg_peers_enabled">Enabled</string>
+    <string name="extra_wg_peers_disabled">Disabled</string>
+    <string name="extra_wg_peers_save">Save</string>
+    <string name="extra_wg_peers_saved_snackbar">Reconnect to apply changes</string>
+    <string name="extra_wg_peers_config_hint">Paste WireGuard peer config here</string>
 </resources>

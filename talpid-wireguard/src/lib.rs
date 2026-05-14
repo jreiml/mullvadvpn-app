@@ -37,6 +37,8 @@ mod gotatun;
 pub mod config;
 mod connectivity;
 mod ephemeral;
+#[cfg(target_os = "android")]
+mod extra_peers;
 mod logging;
 mod obfuscation;
 mod stats;
@@ -465,6 +467,7 @@ impl WireguardMonitor {
 
         let iface_name = tunnel.get_interface_name();
         let tunnel = Arc::new(AsyncMutex::new(Some(tunnel)));
+        let extra_peers = config.extra_peers.clone();
         let mut event_hook = args.event_hook;
         let monitor = WireguardMonitor {
             runtime: args.runtime.clone(),
@@ -543,6 +546,14 @@ impl WireguardMonitor {
             let metadata = Self::tunnel_metadata(&iface_name, &config);
             event_hook.on_event(TunnelEvent::Up(metadata)).await;
 
+            let extras_task = (!extra_peers.is_empty()).then(|| {
+                tokio::spawn(extra_peers::run_manager(
+                    Arc::downgrade(&tunnel),
+                    extra_peers,
+                    args.extra_peers_refresh_rx,
+                ))
+            });
+
             if let Err(error) = connectivity::Monitor::init(connectivity_monitor)
                 .run(Arc::downgrade(&tunnel))
                 .await
@@ -551,6 +562,10 @@ impl WireguardMonitor {
                     "{}",
                     error.display_chain_with_msg("Connectivity monitor failed")
                 );
+            }
+
+            if let Some(task) = extras_task {
+                task.abort();
             }
 
             Err::<Infallible, CloseMsg>(CloseMsg::PingErr)
@@ -990,6 +1005,12 @@ pub(crate) trait Tunnel: Send + Sync {
     fn get_interface_name(&self) -> String;
     fn stop(self: Box<Self>) -> std::result::Result<(), TunnelError>;
     async fn get_tunnel_stats(&self) -> std::result::Result<stats::StatsMap, TunnelError>;
+    #[cfg(target_os = "android")]
+    async fn add_or_update_extra_peer(
+        &self,
+        _peer: &talpid_types::net::wireguard::ExtraPeerConfig,
+        _endpoint: std::net::SocketAddr,
+    ) -> std::result::Result<bool, TunnelError>;
     fn set_config<'a>(
         &'a mut self,
         _config: Config,

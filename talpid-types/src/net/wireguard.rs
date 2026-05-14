@@ -70,6 +70,9 @@ pub struct ConnectionConfig {
     pub tunnel: TunnelConfig,
     pub peer: PeerConfig,
     pub exit_peer: Option<PeerConfig>,
+    #[cfg(target_os = "android")]
+    #[serde(default)]
+    pub extra_peers: Vec<ExtraPeerConfig>,
     /// Gateway used by the tunnel (a private address).
     pub ipv4_gateway: Ipv4Addr,
     pub ipv6_gateway: Option<Ipv6Addr>,
@@ -95,6 +98,23 @@ impl ConnectionConfig {
     pub fn set_ip(&mut self, ip: IpAddr) {
         self.peer.endpoint = SocketAddr::new(ip, self.peer.endpoint.port())
     }
+}
+
+#[cfg(target_os = "android")]
+#[derive(Clone, Eq, PartialEq, Deserialize, Serialize, Debug, Hash)]
+pub struct ExtraPeerConfig {
+    /// Peer's public key.
+    pub public_key: PublicKey,
+    /// Addresses that may be routed to the peer.
+    pub allowed_ips: Vec<IpNetwork>,
+    /// Hostname or IP with port, resolved after the Mullvad tunnel is up.
+    pub endpoint: String,
+    /// Optional static preshared key for this peer.
+    pub psk: Option<PresharedKey>,
+    /// Persistent keepalive interval in seconds. Disabled if omitted or zero.
+    pub persistent_keepalive_secs: Option<u16>,
+    /// How often to re-resolve the endpoint hostname. Defaults in talpid-wireguard.
+    pub resolve_interval_secs: Option<u64>,
 }
 
 #[derive(Clone, Eq, PartialEq, Deserialize, Serialize, Debug, Hash)]
@@ -321,6 +341,10 @@ impl PresharedKey {
     pub fn as_bytes_mut(&mut self) -> &mut [u8; 32] {
         &mut self.0
     }
+
+    pub fn from_base64(key: &str) -> Result<Self, InvalidKey> {
+        key_from_base64(key)
+    }
 }
 
 impl From<Box<[u8; 32]>> for PresharedKey {
@@ -329,9 +353,33 @@ impl From<Box<[u8; 32]>> for PresharedKey {
     }
 }
 
+impl From<[u8; 32]> for PresharedKey {
+    fn from(key: [u8; 32]) -> PresharedKey {
+        PresharedKey(Box::new(key))
+    }
+}
+
 impl fmt::Debug for PresharedKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", &STANDARD.encode(self.as_bytes()))
+    }
+}
+
+impl Serialize for PresharedKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serialize_key(self.as_bytes(), serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PresharedKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserialize_key(deserializer)
     }
 }
 

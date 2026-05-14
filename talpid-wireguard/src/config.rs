@@ -14,6 +14,9 @@ pub struct Config {
     pub entry_peer: wireguard::PeerConfig,
     /// Multihop exit peer
     pub exit_peer: Option<wireguard::PeerConfig>,
+    /// User-defined Android peers added alongside the Mullvad peer.
+    #[cfg(target_os = "android")]
+    pub extra_peers: Vec<wireguard::ExtraPeerConfig>,
     /// IPv4 gateway
     pub ipv4_gateway: Ipv4Addr,
     /// IPv6 gateway
@@ -88,6 +91,8 @@ impl Config {
             tunnel,
             entry_peer: connection.peer.clone(),
             exit_peer: connection.exit_peer.clone(),
+            #[cfg(target_os = "android")]
+            extra_peers: connection.extra_peers.clone(),
             ipv4_gateway: connection.ipv4_gateway,
             ipv6_gateway,
             mtu,

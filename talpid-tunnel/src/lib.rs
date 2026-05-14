@@ -49,6 +49,9 @@ pub struct TunnelArgs<'a> {
     pub retry_attempt: u32,
     /// Route manager handle.
     pub route_manager: RouteManagerHandle,
+    /// Receiver for Android network-change events that should refresh extra WireGuard peers.
+    #[cfg(target_os = "android")]
+    pub extra_peers_refresh_rx: tokio::sync::watch::Receiver<u64>,
 }
 
 #[derive(Clone)]

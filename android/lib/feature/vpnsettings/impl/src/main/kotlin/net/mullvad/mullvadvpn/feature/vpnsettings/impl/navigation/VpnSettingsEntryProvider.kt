@@ -27,4 +27,5 @@ fun EntryProviderScope<NavKey2>.vpnSettingsEntry(navigator: Navigator) {
     ipv6InfoEntry(navigator)
     mtuEntry(navigator)
     quantumResistanceInfoEntry(navigator)
+    extraPeersEntry(navigator)
 }

@@ -12,6 +12,8 @@ mod custom_list;
 pub mod device;
 mod dns;
 pub mod exception_logging;
+#[cfg(target_os = "android")]
+mod extra_peers;
 mod geoip;
 mod leak_checker;
 pub mod logging;
@@ -889,6 +891,10 @@ impl Daemon {
             relay_selector.clone(),
             settings.relay_settings.clone(),
             settings.tunnel_options.clone(),
+            #[cfg(target_os = "android")]
+            config.settings_dir.clone(),
+            #[cfg(target_os = "android")]
+            settings.allow_lan,
         );
 
         let param_gen = parameters_generator.clone();

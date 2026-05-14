@@ -53,6 +53,7 @@ import net.mullvad.mullvadvpn.feature.dns.api.DnsSettingsNavKey
 import net.mullvad.mullvadvpn.feature.serveripoverride.api.ServerIpOverrideNavKey
 import net.mullvad.mullvadvpn.feature.vpnsettings.api.ConnectOnStartupInfoNavKey
 import net.mullvad.mullvadvpn.feature.vpnsettings.api.DeviceIpInfoNavKey
+import net.mullvad.mullvadvpn.feature.vpnsettings.api.ExtraPeersNavKey
 import net.mullvad.mullvadvpn.feature.vpnsettings.api.Ipv6InfoNavKey
 import net.mullvad.mullvadvpn.feature.vpnsettings.api.LocalNetworkSharingInfoNavKey
 import net.mullvad.mullvadvpn.feature.vpnsettings.api.MtuNavKey
@@ -123,6 +124,7 @@ private fun PreviewVpnSettings(
             navigateToDeviceIpInfo = {},
             navigateToConnectOnDeviceOnStartUpInfo = {},
             navigateToAntiCensorship = {},
+            navigateToExtraPeers = {},
         )
     }
 }
@@ -195,6 +197,7 @@ fun SharedTransitionScope.VpnSettings(
             dropUnlessResumed { navigator.navigate(ConnectOnStartupInfoNavKey) },
         navigateToAntiCensorship =
             dropUnlessResumed { navigator.navigateReplaceIfDetailPane(AntiCensorshipNavKey()) },
+        navigateToExtraPeers = dropUnlessResumed { navigator.navigate(ExtraPeersNavKey) },
         onBackClick =
             dropUnlessResumed { navigator.goBackUntil(VpnSettingsNavKey(), inclusive = true) },
     )
@@ -223,6 +226,7 @@ fun VpnSettingsScreen(
     navigateToIpv6Info: () -> Unit,
     navigateToDeviceIpInfo: () -> Unit,
     navigateToConnectOnDeviceOnStartUpInfo: () -> Unit,
+    navigateToExtraPeers: () -> Unit,
 ) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -269,6 +273,7 @@ fun VpnSettingsScreen(
                             navigateToDeviceIpInfo = navigateToDeviceIpInfo,
                             navigateToConnectOnDeviceOnStartUpInfo =
                                 navigateToConnectOnDeviceOnStartUpInfo,
+                            navigateToExtraPeers = navigateToExtraPeers,
                         )
                 }
             }
@@ -296,6 +301,7 @@ fun VpnSettingsContent(
     navigateToIpv6Info: () -> Unit,
     navigateToDeviceIpInfo: () -> Unit,
     navigateToConnectOnDeviceOnStartUpInfo: () -> Unit,
+    navigateToExtraPeers: () -> Unit,
 ) {
     val initialIndexFocus =
         when (initialScrollToFeature) {
@@ -531,6 +537,18 @@ fun VpnSettingsContent(
                 VpnSettingItem.SmallSpacer ->
                     item(contentType = it::class.simpleName) {
                         Spacer(modifier = Modifier.height(Dimens.tinyPadding).animateItem())
+                    }
+
+                is VpnSettingItem.ExtraPeers ->
+                    item(key = it::class.simpleName) {
+                        NavigationListItem(
+                            modifier = Modifier.animateItem(),
+                            title = stringResource(R.string.extra_wg_peers_title),
+                            subtitle =
+                                if (it.enabled) stringResource(R.string.extra_wg_peers_enabled)
+                                else stringResource(R.string.extra_wg_peers_disabled),
+                            onClick = navigateToExtraPeers,
+                        )
                     }
             }
         }

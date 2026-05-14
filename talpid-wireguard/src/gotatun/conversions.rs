@@ -4,6 +4,8 @@ use std::{num::NonZeroUsize, time::SystemTime};
 
 use gotatun::device::Peer;
 use talpid_tunnel_config_client::DaitaSettings;
+#[cfg(target_os = "android")]
+use talpid_types::net::wireguard::ExtraPeerConfig;
 use talpid_types::net::wireguard::PeerConfig;
 
 use crate::stats::{DaitaStats, Stats};
@@ -40,6 +42,32 @@ pub fn to_gotatun_peer(peer: &PeerConfig, daita: Option<&DaitaSettings>) -> Peer
     }
 
     peer
+}
+
+#[cfg(target_os = "android")]
+pub fn to_gotatun_extra_peer(
+    peer: &ExtraPeerConfig,
+    endpoint: Option<std::net::SocketAddr>,
+) -> Peer {
+    let mut gotatun_peer =
+        Peer::new((*peer.public_key.as_bytes()).into()).with_allowed_ips(peer.allowed_ips.clone());
+
+    if let Some(endpoint) = endpoint {
+        gotatun_peer = gotatun_peer.with_endpoint(endpoint);
+    }
+
+    if let Some(psk) = &peer.psk {
+        gotatun_peer = gotatun_peer.with_preshared_key(*psk.as_bytes());
+    }
+
+    if let Some(keepalive) = peer
+        .persistent_keepalive_secs
+        .filter(|keepalive| *keepalive != 0)
+    {
+        gotatun_peer.keepalive = Some(keepalive);
+    }
+
+    gotatun_peer
 }
 
 impl From<gotatun::device::configure::Stats> for Stats {

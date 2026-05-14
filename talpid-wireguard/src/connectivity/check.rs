@@ -397,12 +397,11 @@ impl ConnState {
                 tx_timestamp,
                 stats,
             } => {
-                let rx_incremented = stats.iter().all(|(key, peer_stats)| {
-                    new_stats
-                        .get(key)
-                        .map(|new_stats| new_stats.rx_bytes > peer_stats.rx_bytes)
-                        .unwrap_or(false)
-                });
+                // Sum rx_bytes across all peers: extra peers may be idle while the Mullvad
+                // peer is active, so requiring every peer to increment would incorrectly
+                // trigger keep-alive pings.
+                let rx_incremented = stats.values().map(|stats| stats.rx_bytes).sum::<u64>()
+                    < new_stats.values().map(|stats| stats.rx_bytes).sum();
                 let rx_timestamp = if rx_incremented { now } else { *rx_timestamp };
                 let tx_timestamp = if stats.values().map(|stats| stats.tx_bytes).sum::<u64>()
                     < new_stats.values().map(|stats| stats.tx_bytes).sum()

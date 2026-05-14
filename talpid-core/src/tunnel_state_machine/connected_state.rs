@@ -29,6 +29,8 @@ pub struct ConnectedState {
     tunnel_parameters: TunnelParameters,
     tunnel_close_event: TunnelCloseEvent,
     tunnel_close_tx: oneshot::Sender<()>,
+    #[cfg(target_os = "android")]
+    extra_peers_refresh_tx: tokio::sync::watch::Sender<u64>,
 }
 
 impl ConnectedState {
@@ -39,6 +41,7 @@ impl ConnectedState {
         tunnel_parameters: TunnelParameters,
         tunnel_close_event: TunnelCloseEvent,
         tunnel_close_tx: oneshot::Sender<()>,
+        #[cfg(target_os = "android")] extra_peers_refresh_tx: tokio::sync::watch::Sender<u64>,
     ) -> (Box<dyn TunnelState>, TunnelStateTransition) {
         let connected_state = ConnectedState {
             metadata,
@@ -46,6 +49,8 @@ impl ConnectedState {
             tunnel_parameters,
             tunnel_close_event,
             tunnel_close_tx,
+            #[cfg(target_os = "android")]
+            extra_peers_refresh_tx,
         };
 
         let tunnel_interface = Some(connected_state.metadata.interface.clone());
@@ -335,6 +340,9 @@ impl ConnectedState {
                         AfterDisconnect::Block(ErrorStateCause::IsOffline),
                     )
                 } else {
+                    #[cfg(target_os = "android")]
+                    self.extra_peers_refresh_tx
+                        .send_modify(|generation| *generation += 1);
                     SameState(self)
                 }
             }

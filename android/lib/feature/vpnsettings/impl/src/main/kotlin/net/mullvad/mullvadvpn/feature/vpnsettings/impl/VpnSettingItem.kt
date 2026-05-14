@@ -32,6 +32,8 @@ sealed interface VpnSettingItem {
 
     data object ServerIpOverrides : VpnSettingItem
 
+    data class ExtraPeers(val enabled: Boolean) : VpnSettingItem
+
     data object Divider : VpnSettingItem
 
     data object Spacer : VpnSettingItem

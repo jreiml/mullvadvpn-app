@@ -72,6 +72,8 @@ impl TryFrom<proto::WireguardConfig> for wireguard::ConnectionConfig {
                 constant_packet_size: false,
             },
             exit_peer: None,
+            #[cfg(target_os = "android")]
+            extra_peers: vec![],
             ipv4_gateway,
             ipv6_gateway,
             #[cfg(target_os = "linux")]
